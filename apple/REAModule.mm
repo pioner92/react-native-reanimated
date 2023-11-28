@@ -269,11 +269,13 @@ RCT_EXPORT_BLOCKING_SYNCHRONOUS_METHOD(installTurboModule)
     jsi::Runtime &rnRuntime = *jsiRuntime;
     WorkletRuntimeCollector::install(rnRuntime);
 
-#if __has_include(<UIKit/UIAccessibility.h>)
-    auto isReducedMotion = UIAccessibilityIsReduceMotionEnabled();
-#else
-    auto isReducedMotion = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
-#endif
+// #if __has_include(<UIKit/UIAccessibility.h>)
+//     auto isReducedMotion = UIAccessibilityIsReduceMotionEnabled();
+// #else
+//     auto isReducedMotion = NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion;
+// #endif
+
+    bool isReducedMotion = false;
 
     RNRuntimeDecorator::decorate(rnRuntime, nativeReanimatedModule, isReducedMotion);
 
