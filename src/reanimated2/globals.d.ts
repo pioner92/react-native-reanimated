@@ -6,7 +6,6 @@ import type {
   MeasuredDimensions,
   MapperRegistry,
   ShareableRef,
-  ShareableSyncDataHolderRef,
   ShadowNodeWrapper,
   __ComplexWorkletFunction,
   FlatShareableRef,
@@ -33,7 +32,7 @@ declare global {
     | ((js: string, sourceURL: string, sourceMap: string) => any)
     | undefined;
   var evalWithSourceUrl: ((js: string, sourceURL: string) => any) | undefined;
-  var _log: (s: string) => void;
+  var _log: (value: unknown) => void;
   var _toString: (value: unknown) => string;
   var _notifyAboutProgress: (
     tag: number,
@@ -43,13 +42,6 @@ declare global {
   var _notifyAboutEnd: (tag: number, removeView: boolean) => void;
   var _setGestureState: (handlerTag: number, newState: number) => void;
   var _makeShareableClone: <T>(value: T) => FlatShareableRef<T>;
-  var _updateDataSynchronously: (
-    dataHolder: ShareableSyncDataHolderRef<any>,
-    data: ShareableRef<any>
-  ) => void;
-  var _getDataSynchronously: <T>(
-    dataHolder: ShareableSyncDataHolderRef<T>
-  ) => ShareableRef<T>;
   var _scheduleOnJS: (
     fun: __ComplexWorkletFunction<A, R>,
     args?: unknown[]
@@ -62,7 +54,8 @@ declare global {
     | ((
         operations: {
           tag: number;
-          name: string;
+          name: string | null;
+          // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
           updates: StyleProps | AnimatedStyle<any>;
         }[]
       ) => void)
@@ -71,14 +64,17 @@ declare global {
     | ((
         operations: {
           shadowNodeWrapper: ShadowNodeWrapper;
+          // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
           updates: StyleProps | AnimatedStyle<any>;
         }[]
       ) => void)
     | undefined;
   var _removeFromPropsRegistry: (viewTags: number[]) => void | undefined;
-  var _measurePaper: ((viewTag: number) => MeasuredDimensions) | undefined;
+  var _measurePaper:
+    | ((viewTag: number | null) => MeasuredDimensions)
+    | undefined;
   var _measureFabric:
-    | ((shadowNodeWrapper: ShadowNodeWrapper) => MeasuredDimensions)
+    | ((shadowNodeWrapper: ShadowNodeWrapper | null) => MeasuredDimensions)
     | undefined;
   var _scrollToPaper:
     | ((viewTag: number, x: number, y: number, animated: boolean) => void)

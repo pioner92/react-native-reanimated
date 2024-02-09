@@ -13,10 +13,7 @@ import '../reanimated2/layoutReanimation/animationsManager';
 import invariant from 'invariant';
 import { adaptViewConfig } from '../ConfigHelper';
 import { RNRenderer } from '../reanimated2/platform-specific/RNRenderer';
-import {
-  configureLayoutAnimations,
-  enableLayoutAnimations,
-} from '../reanimated2/core';
+import { enableLayoutAnimations } from '../reanimated2/core';
 import {
   SharedTransition,
   LayoutAnimationType,
@@ -52,11 +49,19 @@ import {
   tryActivateLayoutTransition,
   configureWebLayoutAnimations,
   getReducedMotionFromConfig,
+  saveSnapshot,
 } from '../reanimated2/layoutReanimation/web';
+import { updateLayoutAnimations } from '../reanimated2/UpdateLayoutAnimations';
 import type { CustomConfig } from '../reanimated2/layoutReanimation/web/config';
+import type { FlatList, FlatListProps } from 'react-native';
+import { addHTMLMutationObserver } from '../reanimated2/layoutReanimation/web/domUtils';
 
 const IS_WEB = isWeb();
 const IS_FABRIC = isFabric();
+
+if (IS_WEB) {
+  configureWebLayoutAnimations();
+}
 
 function onlyAnimatedStyles(styles: StyleProps[]): StyleProps[] {
   return styles.filter((style) => style?.viewDescriptors);
@@ -77,6 +82,15 @@ type Options<P> = {
   setNativeProps: (ref: AnimatedComponentRef, props: P) => void;
 };
 
+/**
+ * Lets you create an Animated version of any React Native component.
+ *
+ * @param component - The component you want to make animatable.
+ * @returns A component that Reanimated is capable of animating.
+ * @see https://docs.swmansion.com/react-native-reanimated/docs/core/createAnimatedComponent
+ */
+
+// Don't change the order of overloads, since such a change breaks current behavior
 export function createAnimatedComponent<P extends object>(
   component: FunctionComponent<P>,
   options?: Options<P>
@@ -86,6 +100,22 @@ export function createAnimatedComponent<P extends object>(
   component: ComponentClass<P>,
   options?: Options<P>
 ): ComponentClass<AnimateProps<P>>;
+
+export function createAnimatedComponent<P extends object>(
+  // Actually ComponentType<P = {}> = ComponentClass<P> | FunctionComponent<P> but we need this overload too
+  // since some external components (like FastImage) are typed just as ComponentType
+  component: ComponentType<P>,
+  options?: Options<P>
+): FunctionComponent<AnimateProps<P>> | ComponentClass<AnimateProps<P>>;
+
+/**
+ * @deprecated Please use `Animated.FlatList` component instead of calling `Animated.createAnimatedComponent(FlatList)` manually.
+ */
+// @ts-ignore This is required to create this overload, since type of createAnimatedComponent is incorrect and doesn't include typeof FlatList
+export function createAnimatedComponent(
+  component: typeof FlatList<unknown>,
+  options?: Options<any>
+): ComponentClass<AnimateProps<FlatListProps<unknown>>>;
 
 export function createAnimatedComponent(
   Component: ComponentType<InitialComponentProps>,
@@ -105,7 +135,7 @@ export function createAnimatedComponent(
     _animatedProps?: Partial<AnimatedComponentProps<AnimatedProps>>;
     _viewTag = -1;
     _isFirstRender = true;
-    animatedStyle: { value: StyleProps } = { value: {} };
+    jestAnimatedStyle: { value: StyleProps } = { value: {} };
     _component: AnimatedComponentRef | HTMLElement | null = null;
     _sharedElementTransition: SharedTransition | null = null;
     _jsPropsUpdater = new JSPropsUpdater();
@@ -119,7 +149,7 @@ export function createAnimatedComponent(
     constructor(props: AnimatedComponentProps<InitialComponentProps>) {
       super(props);
       if (isJest()) {
-        this.animatedStyle = { value: {} };
+        this.jestAnimatedStyle = { value: {} };
       }
     }
 
@@ -129,15 +159,20 @@ export function createAnimatedComponent(
       this._attachAnimatedStyles();
       this._InlinePropManager.attachInlineProps(this, this._getViewInfo());
 
-      if (IS_WEB) {
-        configureWebLayoutAnimations();
+      const layout = this.props.layout;
+      if (layout) {
+        this._configureLayoutTransition();
+      }
 
-        if (!this.props.entering) {
-          this._isFirstRender = false;
-          return;
+      if (IS_WEB) {
+        if (this.props.exiting) {
+          saveSnapshot(this._component as HTMLElement);
         }
 
-        if (getReducedMotionFromConfig(this.props.entering as CustomConfig)) {
+        if (
+          !this.props.entering ||
+          getReducedMotionFromConfig(this.props.entering as CustomConfig)
+        ) {
           this._isFirstRender = false;
           return;
         }
@@ -159,16 +194,36 @@ export function createAnimatedComponent(
       this._InlinePropManager.detachInlineProps();
       this._sharedElementTransition?.unregisterTransition(this._viewTag);
 
+      const exiting = this.props.exiting;
       if (
         IS_WEB &&
         this.props.exiting &&
         !getReducedMotionFromConfig(this.props.exiting as CustomConfig)
       ) {
+        addHTMLMutationObserver();
+
         startWebLayoutAnimation(
           this.props,
           this._component as HTMLElement,
           LayoutAnimationType.EXITING
         );
+      } else if (exiting) {
+        const reduceMotionInExiting =
+          'getReduceMotion' in exiting &&
+          typeof exiting.getReduceMotion === 'function'
+            ? getReduceMotionFromConfig(exiting.getReduceMotion())
+            : getReduceMotionFromConfig();
+        if (!reduceMotionInExiting) {
+          updateLayoutAnimations(
+            this._viewTag,
+            LayoutAnimationType.EXITING,
+            maybeBuild(
+              exiting,
+              this.props?.style,
+              AnimatedComponent.displayName
+            )
+          );
+        }
       }
     }
 
@@ -213,9 +268,7 @@ export function createAnimatedComponent(
     _detachStyles() {
       if (IS_WEB && this._styles !== null) {
         for (const style of this._styles) {
-          if (style?.viewsRef) {
-            style.viewsRef.remove(this);
-          }
+          style.viewsRef.remove(this);
         }
       } else if (this._viewTag !== -1 && this._styles !== null) {
         for (const style of this._styles) {
@@ -265,10 +318,8 @@ export function createAnimatedComponent(
 
     _updateFromNative(props: StyleProps) {
       if (options?.setNativeProps) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
         options.setNativeProps(this._component as AnimatedComponentRef, props);
       } else {
-        // eslint-disable-next-line no-unused-expressions
         (this._component as AnimatedComponentRef)?.setNativeProps?.(props);
       }
     }
@@ -378,11 +429,11 @@ export function createAnimatedComponent(
            * We can't update props object directly because TestObject contains a copy of props - look at render function:
            * const props = this._filterNonAnimatedProps(this.props);
            */
-          this.animatedStyle.value = {
-            ...this.animatedStyle.value,
+          this.jestAnimatedStyle.value = {
+            ...this.jestAnimatedStyle.value,
             ...style.initial.value,
           };
-          style.animatedStyle.current = this.animatedStyle;
+          style.jestAnimatedStyle.current = this.jestAnimatedStyle;
         }
       });
 
@@ -397,11 +448,8 @@ export function createAnimatedComponent(
       // attach animatedProps property
       if (this.props.animatedProps?.viewDescriptors) {
         this.props.animatedProps.viewDescriptors.add({
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
           tag: viewTag as number,
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
           name: viewName!,
-          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
           shadowNodeWrapper: shadowNodeWrapper!,
         });
       }
@@ -414,9 +462,18 @@ export function createAnimatedComponent(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       snapshot: DOMRect | null
     ) {
+      const layout = this.props.layout;
+      const oldLayout = prevProps.layout;
+      if (layout !== oldLayout) {
+        this._configureLayoutTransition();
+      }
       this._reattachNativeEvents(prevProps);
       this._attachAnimatedStyles();
       this._InlinePropManager.attachInlineProps(this, this._getViewInfo());
+
+      if (IS_WEB && this.props.exiting) {
+        saveSnapshot(this._component as HTMLElement);
+      }
 
       // Snapshot won't be undefined because it comes from getSnapshotBeforeUpdate method
       if (
@@ -431,6 +488,17 @@ export function createAnimatedComponent(
           snapshot
         );
       }
+    }
+
+    _configureLayoutTransition() {
+      const layout = this.props.layout
+        ? maybeBuild(
+            this.props.layout,
+            undefined /* We don't have to warn user if style has common properties with animation for LAYOUT */,
+            AnimatedComponent.displayName
+          )
+        : undefined;
+      updateLayoutAnimations(this._viewTag, LayoutAnimationType.LAYOUT, layout);
     }
 
     _setComponentRef = setAndForwardRef<Component | HTMLElement>({
@@ -453,21 +521,11 @@ export function createAnimatedComponent(
           if (!shouldBeUseWeb()) {
             enableLayoutAnimations(true, false);
           }
-          if (layout) {
-            configureLayoutAnimations(
-              tag,
-              LayoutAnimationType.LAYOUT,
-              maybeBuild(
-                layout,
-                undefined /* We don't have to warn user if style has common properties with animation for LAYOUT */,
-                AnimatedComponent.displayName
-              )
-            );
-          }
+
           const skipEntering = this.context?.current;
           if (entering && !skipEntering) {
-            configureLayoutAnimations(
-              tag,
+            updateLayoutAnimations(
+              tag as number,
               LayoutAnimationType.ENTERING,
               maybeBuild(
                 entering,
@@ -475,24 +533,6 @@ export function createAnimatedComponent(
                 AnimatedComponent.displayName
               )
             );
-          }
-          if (exiting) {
-            const reduceMotionInExiting =
-              'getReduceMotion' in exiting &&
-              typeof exiting.getReduceMotion === 'function'
-                ? getReduceMotionFromConfig(exiting.getReduceMotion())
-                : getReduceMotionFromConfig();
-            if (!reduceMotionInExiting) {
-              configureLayoutAnimations(
-                tag,
-                LayoutAnimationType.EXITING,
-                maybeBuild(
-                  exiting,
-                  this.props?.style,
-                  AnimatedComponent.displayName
-                )
-              );
-            }
           }
           if (sharedTransitionTag && !IS_WEB) {
             const sharedElementTransition =
@@ -521,7 +561,8 @@ export function createAnimatedComponent(
     // and later on, in componentDidUpdate, calculate translation for layout transition.
     getSnapshotBeforeUpdate() {
       if (
-        (this._component as HTMLElement).getBoundingClientRect !== undefined
+        IS_WEB &&
+        (this._component as HTMLElement)?.getBoundingClientRect !== undefined
       ) {
         return (this._component as HTMLElement).getBoundingClientRect();
       }
@@ -530,10 +571,10 @@ export function createAnimatedComponent(
     }
 
     render() {
-      const props = this._PropsFilter.filterNonAnimatedProps(this);
+      const filteredProps = this._PropsFilter.filterNonAnimatedProps(this);
 
       if (isJest()) {
-        props.animatedStyle = this.animatedStyle;
+        filteredProps.jestAnimatedStyle = this.jestAnimatedStyle;
       }
 
       // Layout animations on web are set inside `componentDidMount` method, which is called after first render.
@@ -543,11 +584,11 @@ export function createAnimatedComponent(
       if (
         this._isFirstRender &&
         IS_WEB &&
-        props.entering &&
-        !getReducedMotionFromConfig(props.entering as CustomConfig)
+        filteredProps.entering &&
+        !getReducedMotionFromConfig(filteredProps.entering as CustomConfig)
       ) {
-        props.style = {
-          ...(props.style ?? {}),
+        filteredProps.style = {
+          ...(filteredProps.style ?? {}),
           visibility: 'hidden', // Hide component until `componentDidMount` triggers
         };
       }
@@ -559,7 +600,7 @@ export function createAnimatedComponent(
 
       return (
         <Component
-          {...props}
+          {...filteredProps}
           // Casting is used here, because ref can be null - in that case it cannot be assigned to HTMLElement.
           // After spending some time trying to figure out what to do with this problem, we decided to leave it this way
           ref={this._setComponentRef as (ref: Component) => void}

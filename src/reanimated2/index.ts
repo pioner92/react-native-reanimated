@@ -14,6 +14,7 @@ export {
   isConfigured,
   enableLayoutAnimations,
   getViewProp,
+  executeOnUIRuntimeSync,
 } from './core';
 export type {
   GestureHandlers,
@@ -80,7 +81,7 @@ export type {
 } from './interpolateColor';
 export {
   /**
-   * @deprecated Please use `Extrapolation` instead.
+   * @deprecated Please use {@link Extrapolation} instead.
    */
   Extrapolate,
   ColorSpace,
